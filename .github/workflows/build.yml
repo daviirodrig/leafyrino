@@ -71,16 +71,6 @@ jobs:
             skip-crashpad: false
             build-deb: false
             plugins: false
-          - os: ubuntu-24.04
-            container: ghcr.io/chatterino/chatterino2-build-ubuntu-24.04:latest
-            qt-version: 6.7.2
-            force-lto: false
-            skip-artifact: true
-            skip-crashpad: true
-            build-appimage: false
-            build-deb: false
-            plugins: false
-            stream-player: true
     env:
       C2_ENABLE_LTO: ${{ matrix.force-lto }}
       C2_ENABLE_CRASHPAD: ${{ matrix.skip-crashpad == false }}
@@ -119,7 +109,6 @@ jobs:
           fi
 
       - name: Install Qt WebEngine
-        if: matrix.stream-player
         run: |
           apt-get update
           apt-get install -y qt6-webengine-dev
@@ -128,10 +117,6 @@ jobs:
         run: |
           mkdir build
           cd build
-          STREAM_PLAYER_FLAG=Off
-          if [ "${{ matrix.stream-player }}" = "true" ]; then
-            STREAM_PLAYER_FLAG=On
-          fi
           CXXFLAGS=-fno-sized-deallocation cmake \
             -DCMAKE_INSTALL_PREFIX=appdir/usr/ \
             -DCMAKE_BUILD_TYPE=Release \
@@ -144,7 +129,7 @@ jobs:
             -DCHATTERINO_NIGHTLY_BUILD=${{ steps.build-type.outputs.NIGHTLY_BUILD }} \
             -DFORCE_JSON_GENERATION=Off \
             -DCHATTERINO_PLUGINS=${{ case(matrix.plugins, 'On', 'Off') }} \
-            -DCHATTERINO_WITH_STREAM_PLAYER="$STREAM_PLAYER_FLAG" \
+            -DCHATTERINO_WITH_STREAM_PLAYER=On \
             ..
           make -j"$(nproc)"
 
@@ -255,8 +240,8 @@ jobs:
         uses: jurplel/install-qt-action@v4.3.1
         with:
           cache: true
-          cache-key-prefix: ${{ runner.os }}-QtCache-${{ matrix.qt-version }}-v2
-          modules: qtimageformats
+          cache-key-prefix: ${{ runner.os }}-QtCache-${{ matrix.qt-version }}-webengine-v1
+          modules: qtimageformats qtwebengine qtwebchannel qtpositioning
           version: ${{ matrix.qt-version }}
 
       # WINDOWS
@@ -330,6 +315,7 @@ jobs:
               -DCHATTERINO_NIGHTLY_BUILD="${{ steps.build-type.outputs.NIGHTLY_BUILD }}" `
               -DFORCE_JSON_GENERATION=Off `
               -DCHATTERINO_SPELLCHECK=On `
+              -DCHATTERINO_WITH_STREAM_PLAYER=On `
               ..
           ninja
 
@@ -347,7 +333,7 @@ jobs:
         if: startsWith(matrix.os, 'windows')
         working-directory: build
         run: |
-          windeployqt bin/${{ env.C2_APP_EXECUTABLE }}.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir Chatterino2/ --force-openssl
+          windeployqt bin/${{ env.C2_APP_EXECUTABLE }}.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --webenginewidgets --dir Chatterino2/ --force-openssl
           cp bin/${{ env.C2_APP_EXECUTABLE }}.exe Chatterino2/
           ..\.CI\deploy-crt.ps1 Chatterino2
 
@@ -396,6 +382,7 @@ jobs:
               -DFORCE_JSON_GENERATION=Off \
               -DCHATTERINO_NIGHTLY_BUILD=${{ steps.build-type.outputs.NIGHTLY_BUILD }} \
               -DCHATTERINO_SPELLCHECK=On \
+              -DCHATTERINO_WITH_STREAM_PLAYER=On \
               ..
           make -j"$(sysctl -n hw.logicalcpu)"
         shell: bash
