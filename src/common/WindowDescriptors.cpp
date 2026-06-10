@@ -204,6 +204,14 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
                 MultiChannelIndicatorMode::PlatformBadgeIfUnselected);
         descriptor.mcIndex = static_cast<uint32_t>(data["activeIndex"].toInt());
     }
+    else if (descriptor.type_ == u"player")
+    {
+        descriptor.playerPlatform_ = data.value("platform").toString();
+        if (descriptor.playerPlatform_.isEmpty())
+        {
+            descriptor.playerPlatform_ = QStringLiteral("twitch");
+        }
+    }
 }
 
 TabDescriptor TabDescriptor::loadFromJSON(const QJsonObject &tabObj)
