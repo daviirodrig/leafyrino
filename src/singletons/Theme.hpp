@@ -164,14 +164,14 @@ public:
 
     pajlada::Signals::NoArgSignal updated;
 
-    QStringSetting themeName{"/appearance/theme/name", "Dark"};
+    QStringSetting themeName{"/appearance/theme/name", "System"};
     QStringSetting lightSystemThemeName{"/appearance/theme/lightSystem",
                                         "Light"};
     QStringSetting darkSystemThemeName{"/appearance/theme/darkSystem", "Dark"};
 
-private:
     bool isLight_ = false;
 
+private:
     std::vector<ThemeDescriptor> availableThemes_;
 
     QString currentThemePath_;

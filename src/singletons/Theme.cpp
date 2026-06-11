@@ -23,6 +23,7 @@
 #endif
 #include <QApplication>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -264,6 +265,139 @@ std::optional<QJsonObject> loadTheme(const ThemeDescriptor &theme)
     return loadThemeFromPath(theme.path);
 }
 
+QColor blendColors(const QColor &from, const QColor &to, qreal amount)
+{
+    const auto clamped = std::clamp(amount, 0.0, 1.0);
+    const auto blend = [clamped](int a, int b) {
+        return qRound(a + (b - a) * clamped);
+    };
+
+    return QColor(blend(from.red(), to.red()), blend(from.green(), to.green()),
+                  blend(from.blue(), to.blue()), blend(from.alpha(), to.alpha()));
+}
+
+QColor withAlpha(QColor color, int alpha)
+{
+    color.setAlpha(alpha);
+    return color;
+}
+
+QString cssColor(const QColor &color)
+{
+    return color.name(color.alpha() == 255 ? QColor::HexRgb : QColor::HexArgb);
+}
+
+void applyNativePalette(chatterino::Theme &theme)
+{
+    const auto palette = QApplication::palette();
+    const auto window = palette.color(QPalette::Window);
+    const auto windowText = palette.color(QPalette::WindowText);
+    const auto base = palette.color(QPalette::Base);
+    const auto alternateBase = palette.color(QPalette::AlternateBase);
+    const auto button = palette.color(QPalette::Button);
+    const auto buttonText = palette.color(QPalette::ButtonText);
+    const auto text = palette.color(QPalette::Text);
+    const auto disabledText = palette.color(QPalette::Disabled, QPalette::Text);
+    const auto highlight = palette.color(QPalette::Highlight);
+    const auto highlightedText = palette.color(QPalette::HighlightedText);
+    const auto link = palette.color(QPalette::Link);
+    const auto placeholder = palette.color(QPalette::PlaceholderText);
+    const auto mid = palette.color(QPalette::Mid);
+    const bool light = window.lightness() >= 128;
+    const auto hover = light ? blendColors(button, Qt::black, 0.06)
+                             : blendColors(button, Qt::white, 0.08);
+    const auto focused = blendColors(button, highlight, light ? 0.18 : 0.28);
+    const auto separator = light ? blendColors(window, Qt::black, 0.18)
+                                 : blendColors(window, Qt::white, 0.18);
+    const auto pulse = blendColors(base, highlight, light ? 0.15 : 0.25);
+
+    theme.isLight_ = light;
+    theme.palette = palette;
+    theme.accent = highlight;
+
+    theme.window.background = window;
+    theme.window.text = windowText;
+
+    theme.tabs.dividerLine = separator;
+    theme.tabs.liveIndicator = highlight;
+    theme.tabs.rerunIndicator = link;
+
+    auto setTab = [&](auto &tab, const QColor &background) {
+        tab.text = buttonText;
+        tab.backgrounds.regular = background;
+        tab.backgrounds.hover = hover;
+        tab.backgrounds.unfocused = window;
+        tab.line.regular = separator;
+        tab.line.hover = highlight;
+        tab.line.unfocused = mid;
+    };
+    setTab(theme.tabs.regular, button);
+    setTab(theme.tabs.newMessage, blendColors(button, highlight, light ? 0.10 : 0.18));
+    setTab(theme.tabs.highlighted, blendColors(button, highlight, light ? 0.18 : 0.28));
+    theme.tabs.selected.text = highlightedText;
+    theme.tabs.selected.backgrounds.regular = highlight;
+    theme.tabs.selected.backgrounds.hover = blendColors(highlight, windowText, 0.12);
+    theme.tabs.selected.backgrounds.unfocused = blendColors(button, highlight, 0.35);
+    theme.tabs.selected.line.regular = highlight;
+    theme.tabs.selected.line.hover = highlight;
+    theme.tabs.selected.line.unfocused = mid;
+
+    auto setMessageColors = [&](auto &messages) {
+        messages.textColors.regular = text;
+        messages.textColors.caret = text;
+        messages.textColors.link = link;
+        messages.textColors.system = placeholder.isValid() ? placeholder : disabledText;
+        messages.textColors.chatPlaceholder = placeholder.isValid() ? placeholder : disabledText;
+        messages.backgrounds.regular = base;
+        messages.backgrounds.alternate = alternateBase;
+        messages.disabled = disabledText;
+        messages.selection = highlight;
+    };
+    setMessageColors(theme.messages);
+    theme.messages.highlightAnimationStart = withAlpha(highlight, 90);
+    theme.messages.highlightAnimationEnd = withAlpha(highlight, 0);
+    setMessageColors(theme.overlayMessages);
+    theme.overlayMessages.background = withAlpha(window, 230);
+
+    theme.scrollbars.background = window;
+    theme.scrollbars.thumb = mid;
+    theme.scrollbars.thumbSelected = highlight;
+
+    theme.splits.messageSeperator = separator;
+    theme.splits.background = window;
+    theme.splits.dropPreview = withAlpha(highlight, 80);
+    theme.splits.dropPreviewBorder = highlight;
+    theme.splits.dropTargetRect = withAlpha(highlight, 45);
+    theme.splits.dropTargetRectBorder = highlight;
+    theme.splits.resizeHandle = mid;
+    theme.splits.resizeHandleBackground = window;
+
+    theme.splits.header.border = separator;
+    theme.splits.header.focusedBorder = highlight;
+    theme.splits.header.background = button;
+    theme.splits.header.focusedBackground = focused;
+    theme.splits.header.text = buttonText;
+    theme.splits.header.focusedText = buttonText;
+
+    theme.splits.input.background = base;
+    theme.splits.input.backgroundPulse = pulse;
+    theme.splits.input.text = text;
+
+    theme.splits.input.styleSheet = uR"(
+        background: %1;
+        border: 1px solid %2;
+        color: %3;
+        selection-background-color: %4;
+        selection-color: %5;
+    )"_s.arg(cssColor(theme.splits.input.background),
+              cssColor(theme.tabs.selected.backgrounds.regular),
+              cssColor(theme.splits.input.text), cssColor(highlight),
+              cssColor(highlightedText));
+
+    theme.buttons.copy = light ? getResources().buttons.copyDark
+                               : getResources().buttons.copyLight;
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -398,34 +532,31 @@ Theme::Theme(const Paths &paths)
                          }
                      });
 #endif
-
     this->update();
 }
 
 void Theme::update()
 {
-    auto currentTheme = [&]() -> QString {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-        if (this->isSystemTheme())
-        {
-            switch (QApplication::styleHints()->colorScheme())
-            {
-                case Qt::ColorScheme::Light:
-                    return this->lightSystemThemeName;
-                case Qt::ColorScheme::Unknown:
-                case Qt::ColorScheme::Dark:
-                    return this->darkSystemThemeName;
-            }
-        }
-#endif
-        return this->themeName;
-    };
-
-    auto oTheme = this->findThemeByKey(currentTheme());
-
     constexpr const double nsToMs = 1.0 / 1000000.0;
     QElapsedTimer timer;
     timer.start();
+
+    if (this->isSystemTheme())
+    {
+        applyNativePalette(*this);
+        auto parseTs = double(timer.nsecsElapsed()) * nsToMs;
+
+        this->updated.invoke();
+        auto updateTs = double(timer.nsecsElapsed()) * nsToMs;
+        qCDebug(chatterinoTheme).nospace().noquote()
+            << "Updated native Qt theme in " << QString::number(updateTs, 'f', 2)
+            << "ms (parse: " << QString::number(parseTs, 'f', 2)
+            << "ms, update: " << QString::number(updateTs - parseTs, 'f', 2)
+            << "ms)";
+        return;
+    }
+
+    auto oTheme = this->findThemeByKey(this->themeName);
 
     std::optional<QJsonObject> themeJSON;
     QString themePath;

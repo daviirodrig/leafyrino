@@ -141,23 +141,6 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         SettingWidget::dropdown("Theme", themes->themeName, available)
             ->addTo(layout);
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-        SettingWidget::dropdown("Dark system theme",
-                                themes->darkSystemThemeName,
-                                themes->availableThemes())
-            ->setTooltip("This theme is selected if your system is in a dark "
-                         "theme and you enabled the adaptive 'System' theme.")
-            ->conditionallyEnabledBy(themes->themeName, "System")
-            ->addTo(layout);
-
-        SettingWidget::dropdown("Light system theme",
-                                themes->lightSystemThemeName,
-                                themes->availableThemes())
-            ->setTooltip("This theme is selected if your system is in a light "
-                         "theme and you enabled the adaptive 'System' theme.")
-            ->conditionallyEnabledBy(themes->themeName, "System")
-            ->addTo(layout);
-#endif
     }
 
     layout.addDropdown<float>(
