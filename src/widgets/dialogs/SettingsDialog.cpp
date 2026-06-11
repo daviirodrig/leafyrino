@@ -35,6 +35,7 @@
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QLineEdit>
+#include <QPalette>
 
 namespace chatterino {
 
@@ -63,11 +64,21 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         qCWarning(chatterinoWidget) << "Resources not loaded";
     }
     QString stylesheet = QString::fromUtf8(styleFile.readAll());
+
+    const auto palette = QApplication::palette();
+    const auto titleColor = palette.color(QPalette::Highlight).name();
+    const auto descriptionColor = palette.color(QPalette::PlaceholderText).name();
+    const auto navigationColor = palette.color(QPalette::LinkVisited).name();
+    stylesheet.prepend(QStringLiteral(
+                           "chatterino--TitleLabel, "
+                           "chatterino--SubtitleLabel { color: %1; }"
+                           "chatterino--DescriptionLabel { color: %2; }"
+                           "chatterino--NavigationLabel { color: %3; }")
+                           .arg(titleColor, descriptionColor, navigationColor));
     this->setStyleSheet(stylesheet);
 
     this->initUi();
     this->addTabs();
-    this->overrideBackgroundColor_ = QColor("#111111");
 
     this->addShortcuts();
     this->signalHolder_.managedConnect(getApp()->getHotkeys()->onItemsUpdated,
@@ -320,13 +331,16 @@ void SettingsDialog::selectTab(SettingsDialogTab *tab, bool byUser)
     if (this->selectedTab_ != nullptr)
     {
         this->selectedTab_->setSelected(false);
-        this->selectedTab_->setStyleSheet("color: #FFF");
+        this->selectedTab_->setStyleSheet("");
     }
 
+    const auto palette = QApplication::palette();
+    const auto tabStyle = QStringLiteral("background: %1; color: %2;")
+                              .arg(palette.color(QPalette::Highlight).name(),
+                                   palette.color(QPalette::HighlightedText).name());
+
     tab->setSelected(true);
-    tab->setStyleSheet(
-        "background: #222; color: #4FC3F7;"  // Should this be same as accent color?
-        "/*border: 1px solid #555; border-right: none;*/");
+    tab->setStyleSheet(tabStyle);
     this->selectedTab_ = tab;
     if (byUser)
     {
@@ -461,7 +475,6 @@ void SettingsDialog::themeChangedEvent()
     BaseWindow::themeChangedEvent();
 
     QPalette palette;
-    palette.setColor(QPalette::Window, QColor("#111"));
     this->setPalette(palette);
 }
 

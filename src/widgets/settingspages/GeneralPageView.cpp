@@ -344,7 +344,9 @@ void GeneralPageView::updateNavigationHighlighting()
                       &group == &this->groups_.back()))
         {
             first = false;
-            group.navigationLink->setStyleSheet("color: #00ABF4");
+            const auto navigationStyle = QStringLiteral("color: %1;").arg(
+                this->palette().color(QPalette::Highlight).name());
+            group.navigationLink->setStyleSheet(navigationStyle);
         }
         else
         {

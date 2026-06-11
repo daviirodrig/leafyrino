@@ -27,7 +27,7 @@ SettingsDialogTab::SettingsDialogTab(SettingsDialog *_dialog,
 
     this->setCursor(QCursor(Qt::PointingHandCursor));
 
-    this->setStyleSheet("color: #FFF");
+    this->setStyleSheet("");
 }
 
 void SettingsDialogTab::setSelected(bool _selected)
@@ -73,6 +73,11 @@ void SettingsDialogTab::paintEvent(QPaintEvent *)
     int pad = (this->height() - iconSize) / 2;
     QPixmap pixmap = this->ui_.icon.pixmap(
         QSize(this->height() - pad * 2, this->height() - pad * 2));
+
+    QPainter iconPainter(&pixmap);
+    iconPainter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    iconPainter.fillRect(pixmap.rect(), this->palette().color(QPalette::Text));
+    iconPainter.end();
 
     painter.drawPixmap(pad, pad, pixmap);
 

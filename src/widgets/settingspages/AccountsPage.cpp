@@ -42,8 +42,6 @@ AccountsPage::AccountsPage()
         LoginDialog d(this);
         d.exec();
     });
-
-    view->getTableView()->setStyleSheet("background: #333");
 }
 
 }  // namespace chatterino

@@ -1144,6 +1144,8 @@ void Notebook::paintEvent(QPaintEvent *event)
     auto scale = this->scale();
 
     QPainter painter(this);
+    painter.fillRect(this->rect(), this->theme->window.background);
+
     if (this->tabLocation_ == NotebookTabLocation::Top ||
         this->tabLocation_ == NotebookTabLocation::Bottom)
     {
