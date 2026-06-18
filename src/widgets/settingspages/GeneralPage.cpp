@@ -502,7 +502,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                             s.fadeMessageHistory)
         ->setTooltip(
             "Reduce opacity of messages that were posted before Leafyrino "
-            "was started or while re-connection.")
+            "was started or while re-connecting.")
         ->addTo(layout);
 
     SettingWidget::checkbox("Hide deleted messages", s.hideModerated)
@@ -947,7 +947,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 
     layout.addSubtitle("Application Data");
     layout.addDescription("All local files like settings and cache files are "
-                          "store in this directory.");
+                          "stored in this directory.");
     layout.addButton("Open AppData directory", [] {
 #ifdef Q_OS_DARWIN
         QDesktopServices::openUrl("file://" +
@@ -1377,7 +1377,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 
     SettingWidget::checkbox("Mention users with a comma",
                             s.mentionUsersWithComma)
-        ->setTooltip("When using tab-completon, if the username is at the "
+        ->setTooltip("When using tab-completion, if the username is at the "
                      "start of the message, include a comma at the end of the "
                      "name.\ne.g. pajl -> pajlada,")
         ->addTo(layout);
@@ -1480,7 +1480,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
             },
             false,
             "Customizes how you see Asian Language names.\nUsing an option "
-            "that includes \"localized\" will display the username in it's "
+            "that includes \"localized\" will display the username in its "
             "respective Asian language.\ne.g. "
             "Username and localized: testaccount_420(테스트계정420)\n"
             "Username: testaccount_420\n"
@@ -1507,7 +1507,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         "Double click to open links and other elements in chat",
         s.linksDoubleClickOnly)
         ->setTooltip("When enabled, opening links/usercards requires "
-                     "double-clicking.\nUseful making sure you don't "
+                     "double-clicking.\nUseful for making sure you don't "
                      "accidentally click on suspicious links.")
         ->addTo(layout);
 
@@ -1553,6 +1553,12 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 
     SettingWidget::checkbox("Load message history on connect",
                             s.loadTwitchMessageHistoryOnConnect)
+        ->addTo(layout);
+
+    SettingWidget::dropdown("Message history provider", s.recentMessagesApi)
+        ->setTooltip(
+            "Service used to load chat history when joining a channel.\n"
+            "CHATTERINO2_RECENT_MESSAGES_URL overrides this when set.")
         ->addTo(layout);
 
     SettingWidget::intInput("Max number of history messages to load on connect",
@@ -1619,7 +1625,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         ->addTo(layout);
 
     SettingWidget::dropdown("Chat send protocol", s.chatSendProtocol)
-        ->setTooltip("'Helix' will use Twitch's Helix API to send message. "
+        ->setTooltip("'Helix' will use Twitch's Helix API to send messages. "
                      "'IRC' will use IRC to send messages.")
         ->addTo(layout);
 

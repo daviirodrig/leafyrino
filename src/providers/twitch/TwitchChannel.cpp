@@ -60,6 +60,7 @@
 #include "widgets/Window.hpp"
 
 #include <IrcConnection>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -97,6 +98,7 @@ using detail::isUnknownCommand;
 
 namespace {
 const QString MAGIC_MESSAGE_SUFFIX = u" \u034f"_s;
+
 constexpr int CLIP_CREATION_COOLDOWN = 5000;
 constexpr qint64 CHANNEL_POINTS_MIN_REFRESH_INTERVAL_MS = 10'000;
 constexpr qint64 CHANNEL_POINTS_STALE_AFTER_MS = 120'000;
@@ -363,6 +365,39 @@ QString pinnedChatEventPinId(const QJsonObject &data)
     return id;
 }
 
+QString pinnedChatEventPinnerName(const QJsonObject &data)
+{
+    return userDisplayNameFromObject(
+        objectFromAnyKey(data, "pinned_by", "pinnedBy"));
+}
+
+QString pinnedChatPinSystemMessageKey(const QJsonObject &innerData)
+{
+    const auto pinId = pinnedChatEventPinId(innerData);
+    if (!pinId.isEmpty())
+    {
+        return pinId;
+    }
+
+    const auto message = innerData.value("message").toObject();
+    return message.value("id").toString();
+}
+
+QString pinnedChatMessagePreviewText(const QJsonObject &innerData)
+{
+    const auto message = innerData.value("message").toObject();
+    const auto content = message.value("content").toObject();
+    auto text = content.value("text").toString().simplified();
+
+    const auto limit = getSettings()->deletedMessageLengthLimit.getValue();
+    if (limit > 0 && text.length() > limit)
+    {
+        text = QStringView(text).left(limit) % u'…';
+    }
+
+    return text;
+}
+
 QString predictionWinnerTitle(const TwitchChannel::PredictionEvent &prediction)
 {
     if (prediction.winningOutcomeId.isEmpty())
@@ -425,6 +460,76 @@ QString predictionSystemMessageKey(
     }
 
     return subject + ':' + kind + ':' + prediction.winningOutcomeId;
+}
+
+QString pollWinnerTitle(const TwitchChannel::PollEvent &poll)
+{
+    if (poll.choices.empty())
+    {
+        return {};
+    }
+
+    const auto leaderIt =
+        std::max_element(poll.choices.begin(), poll.choices.end(),
+                         [](const auto &a, const auto &b) {
+                             return a.totalVotes < b.totalVotes;
+                         });
+    if (leaderIt->totalVotes <= 0)
+    {
+        return {};
+    }
+
+    return leaderIt->title;
+}
+
+QString pollTerminalSystemMessageKind(const QString &status)
+{
+    if (status.compare("TERMINATED", Qt::CaseInsensitive) == 0)
+    {
+        return QStringLiteral("terminated");
+    }
+    if (status.compare("ARCHIVED", Qt::CaseInsensitive) == 0)
+    {
+        return QStringLiteral("archived");
+    }
+    if (status.compare("COMPLETED", Qt::CaseInsensitive) == 0)
+    {
+        return QStringLiteral("completed");
+    }
+
+    return {};
+}
+
+QString pollSystemMessageKind(const QString &type,
+                              const TwitchChannel::PollEvent &poll)
+{
+    if (type == "POLL_CREATE")
+    {
+        return QStringLiteral("created");
+    }
+    if (type == "POLL_END" || type == "POLL_UPDATE")
+    {
+        return pollTerminalSystemMessageKind(poll.status);
+    }
+
+    return {};
+}
+
+QString pollSystemMessageKey(const QString &kind,
+                             const TwitchChannel::PollEvent &poll)
+{
+    if (kind.isEmpty())
+    {
+        return {};
+    }
+
+    auto subject = poll.id;
+    if (subject.isEmpty())
+    {
+        subject = poll.title;
+    }
+
+    return subject + ':' + kind + ':' + poll.status;
 }
 
 QString sanitizeChatWarningReason(QString reason)
@@ -604,6 +709,7 @@ TwitchChannel::TwitchChannel(const QString &name, bool anonymous)
             }
             this->eventSubChannelChatUserMessageHoldHandle.reset();
             this->eventSubChannelChatUserMessageUpdateHandle.reset();
+            this->eventSubChannelFollowHandle.reset();
             this->eventSubChannelModerateHandle.reset();
             this->eventSubAutomodMessageHoldHandle.reset();
             this->eventSubAutomodMessageUpdateHandle.reset();
@@ -643,6 +749,11 @@ TwitchChannel::TwitchChannel(const QString &name, bool anonymous)
         },
         this->signalHolder_);
     getSettings()->showRaidStatusAboveInput.connect(
+        [this](const auto &, auto) {
+            this->refreshPubSub();
+        },
+        this->signalHolder_);
+    getSettings()->showFollowEventsInChat.connect(
         [this](const auto &, auto) {
             this->refreshPubSub();
         },
@@ -3232,6 +3343,7 @@ void TwitchChannel::refreshPubSub()
         this->eventSubSuspiciousUserUpdateHandle.reset();
         this->eventSubChannelChatUserMessageHoldHandle.reset();
         this->eventSubChannelChatUserMessageUpdateHandle.reset();
+        this->eventSubChannelFollowHandle.reset();
     };
 
     if (this->isAnonymous())
@@ -3310,6 +3422,61 @@ void TwitchChannel::refreshPubSub()
     }
 
     const auto &currentTwitchUserID = currentAccount->getUserId();
+
+    if (getSettings()->showFollowEventsInChat && this->hasModRights())
+    {
+        MoltorinoAuthToken followAuth;
+        if (this->isBroadcaster())
+        {
+            followAuth = MoltorinoAuth::resolveSavedBroadcasterToken(
+                roomId, this->getName());
+            if (!followAuth.hasToken())
+            {
+                followAuth = MoltorinoAuth::resolveCurrentUserToken();
+            }
+        }
+        else
+        {
+            followAuth =
+                MoltorinoAuth::resolveModerationToken(roomId, this->getName());
+        }
+
+        const auto moderatorUserId = followAuth.userId.isEmpty()
+                                         ? currentTwitchUserID
+                                         : followAuth.userId;
+
+        if (followAuth.hasToken())
+        {
+            this->eventSubChannelFollowHandle =
+                getApp()->getEventSub()->subscribe(
+                    eventsub::SubscriptionRequest{
+                        .subscriptionType = "channel.follow",
+                        .subscriptionVersion = "2",
+                        .ownerTwitchUserID = currentTwitchUserID,
+                        .conditions =
+                            {
+                                {
+                                    "broadcaster_user_id",
+                                    roomId,
+                                },
+                                {
+                                    "moderator_user_id",
+                                    moderatorUserId,
+                                },
+                            },
+                        .helixClientId = MoltorinoAuth::twitchTvClientId(),
+                        .helixOAuthToken = followAuth.token,
+                    });
+        }
+        else
+        {
+            this->eventSubChannelFollowHandle.reset();
+        }
+    }
+    else
+    {
+        this->eventSubChannelFollowHandle.reset();
+    }
 
     if (this->hasModRights())
     {
@@ -4138,6 +4305,57 @@ bool TwitchChannel::isLoadingRecentMessages() const
     return this->loadingRecentMessages_.test();
 }
 
+void TwitchChannel::tryEmitPinnedChatPinSystemMessage(
+    const QJsonObject &innerData)
+{
+    if (!getSettings()->showPinNotifications)
+    {
+        return;
+    }
+
+    const auto key = pinnedChatPinSystemMessageKey(innerData);
+    if (!key.isEmpty() && key == this->lastPinSystemMessageKey_)
+    {
+        return;
+    }
+
+    {
+        auto locked = this->currentPin_.accessConst();
+        if (locked->has_value() && (**locked).pinId == key)
+        {
+            return;
+        }
+    }
+
+    const auto pinnerName = pinnedChatEventPinnerName(innerData);
+    const auto messageText = pinnedChatMessagePreviewText(innerData);
+
+    QString systemText;
+    if (!pinnerName.isEmpty() && !messageText.isEmpty())
+    {
+        systemText = QString("%1 pinned: \"%2\"").arg(pinnerName, messageText);
+    }
+    else if (!pinnerName.isEmpty())
+    {
+        systemText = QString("%1 pinned a message.").arg(pinnerName);
+    }
+    else if (!messageText.isEmpty())
+    {
+        systemText = QString("A message was pinned: \"%1\"").arg(messageText);
+    }
+    else
+    {
+        systemText = QStringLiteral("A message was pinned.");
+    }
+
+    if (!key.isEmpty())
+    {
+        this->lastPinSystemMessageKey_ = key;
+    }
+
+    this->addSystemMessage(systemText);
+}
+
 void TwitchChannel::handlePinnedChatUpdate(const QJsonObject &data)
 {
     QString type = data.value("type").toString();
@@ -4145,30 +4363,13 @@ void TwitchChannel::handlePinnedChatUpdate(const QJsonObject &data)
     const auto innerData =
         innerDataValue.isObject() ? innerDataValue.toObject() : QJsonObject{};
 
-    if (type == "pin-message" || type == "update-message")
+    if (type == "pin-message")
     {
-        if (!innerData.isEmpty())
-        {
-            if (innerData.contains("message") &&
-                innerData["message"].isObject())
-            {
-                auto msgObj = innerData["message"].toObject();
-
-                PinnedMessage pin;
-                if (innerData.contains("id"))
-                    pin.pinId = innerData["id"].toString();
-                if (msgObj.contains("id"))
-                    pin.messageId = msgObj["id"].toString();
-                if (msgObj.contains("content") && msgObj["content"].isObject())
-                {
-                    auto contentObj = msgObj["content"].toObject();
-                    if (contentObj.contains("text"))
-                        pin.text = contentObj["text"].toString();
-                }
-                this->refreshPinnedMessage();
-                return;
-            }
-        }
+        this->tryEmitPinnedChatPinSystemMessage(innerData);
+        this->refreshPinnedMessage();
+    }
+    else if (type == "update-message")
+    {
         this->refreshPinnedMessage();
     }
     else if (type == "unpin-message")
@@ -4195,20 +4396,8 @@ void TwitchChannel::handlePinnedChatUpdate(const QJsonObject &data)
 
         if (currentPin.has_value() && getSettings()->showUnpinNotifications)
         {
-            QString unpinnerName;
-            if (!innerData.isEmpty())
-            {
-                if (innerData.contains("unpinned_by") &&
-                    innerData["unpinned_by"].isObject())
-                {
-                    auto unpinner = innerData["unpinned_by"].toObject();
-                    unpinnerName = unpinner.value("display_name").toString();
-                    if (unpinnerName.isEmpty())
-                    {
-                        unpinnerName = unpinner.value("login").toString();
-                    }
-                }
-            }
+            QString unpinnerName = userDisplayNameFromObject(
+                objectFromAnyKey(innerData, "unpinned_by", "unpinnedBy"));
 
             if (unpinnerName.isEmpty())
             {
@@ -4220,6 +4409,7 @@ void TwitchChannel::handlePinnedChatUpdate(const QJsonObject &data)
                     QString("%1 unpinned the message.").arg(unpinnerName));
             }
         }
+        this->lastPinSystemMessageKey_.clear();
         this->setPinnedMessage(std::nullopt);
     }
 }
@@ -4296,10 +4486,43 @@ void TwitchChannel::setActivePoll(std::optional<PollEvent> poll)
             {
                 poll->createdByName = previous.createdByName;
             }
+            if (poll->endedByName.isEmpty())
+            {
+                poll->endedByName = previous.endedByName;
+            }
         }
         *locked = std::move(poll);
     }
+
+    {
+        auto locked = this->activePoll_.accessConst();
+        if (locked->has_value())
+        {
+            this->tryEmitPollCreatedSystemMessage(**locked);
+        }
+    }
+
     this->pollChanged.invoke();
+}
+
+void TwitchChannel::tryEmitPollCreatedSystemMessage(const PollEvent &poll)
+{
+    if (poll.createdByName.isEmpty() || poll.title.isEmpty())
+    {
+        return;
+    }
+
+    const auto kind = QStringLiteral("created");
+    const auto key = pollSystemMessageKey(kind, poll);
+    if (!getSettings()->showPredictionSystemMessages || key.isEmpty() ||
+        key == this->lastPollSystemMessageKey_)
+    {
+        return;
+    }
+
+    this->lastPollSystemMessageKey_ = key;
+    this->addSystemMessage(QString("%1 created a poll: \"%2\"")
+                               .arg(poll.createdByName, poll.title));
 }
 
 void TwitchChannel::setActiveRaid(std::optional<RaidEvent> raid)
@@ -4488,6 +4711,16 @@ void TwitchChannel::handlePredictionUpdate(const QJsonObject &payload)
         return;
     }
 
+    {
+        auto cur = this->activePrediction_.access();
+        if (cur->has_value() && (*cur)->id == prediction.id &&
+            (*cur)->selfPoints > 0)
+        {
+            prediction.selfPoints = (*cur)->selfPoints;
+            prediction.selfOutcomeId = (*cur)->selfOutcomeId;
+        }
+    }
+
     this->setActivePrediction(std::move(prediction));
 }
 
@@ -4503,7 +4736,60 @@ void TwitchChannel::handlePollUpdate(const QJsonObject &payload)
         poll = data;
     }
 
-    auto finishCurrentPoll = [this, &poll] {
+    auto emitPollSystemMessages = [this](const QString &messageType,
+                                         const PollEvent &pollEvent) {
+        const auto systemMessageKind =
+            pollSystemMessageKind(messageType, pollEvent);
+        const auto systemMessageKey =
+            pollSystemMessageKey(systemMessageKind, pollEvent);
+        if (!getSettings()->showPredictionSystemMessages ||
+            systemMessageKind.isEmpty())
+        {
+            return;
+        }
+
+        if (systemMessageKind == "created")
+        {
+            this->tryEmitPollCreatedSystemMessage(pollEvent);
+            return;
+        }
+
+        if (systemMessageKey == this->lastPollSystemMessageKey_)
+        {
+            return;
+        }
+
+        this->lastPollSystemMessageKey_ = systemMessageKey;
+        if (systemMessageKind == "completed")
+        {
+            const auto actor = predictionActorOrFallback(pollEvent.endedByName);
+            const auto winnerTitle = pollWinnerTitle(pollEvent);
+            if (winnerTitle.isEmpty())
+            {
+                this->addSystemMessage(QString("%1 ended the poll: \"%2\"")
+                                           .arg(actor, pollEvent.title));
+            }
+            else
+            {
+                this->addSystemMessage(QString("%1 ended the poll: \"%2\" won")
+                                           .arg(actor, winnerTitle));
+            }
+        }
+        else if (systemMessageKind == "terminated")
+        {
+            this->addSystemMessage(
+                QString("%1 ended the poll early")
+                    .arg(predictionActorOrFallback(pollEvent.endedByName)));
+        }
+        else if (systemMessageKind == "archived")
+        {
+            this->addSystemMessage(
+                QString("%1 archived the poll")
+                    .arg(predictionActorOrFallback(pollEvent.endedByName)));
+        }
+    };
+
+    auto finishCurrentPoll = [this, &poll, &type, &emitPollSystemMessages] {
         std::optional<PollEvent> currentPoll;
         {
             auto locked = this->activePoll_.accessConst();
@@ -4527,7 +4813,28 @@ void TwitchChannel::handlePollUpdate(const QJsonObject &payload)
         currentPoll->status = status;
         currentPoll->remainingDurationMilliseconds = 0;
         currentPoll->endsAt = QDateTime::currentDateTimeUtc();
+
+        const auto endedBy = objectFromAnyKey(poll, "ended_by", "endedBy");
+        const auto endedByName = userDisplayNameFromObject(endedBy);
+        if (!endedByName.isEmpty())
+        {
+            currentPoll->endedByName = endedByName;
+        }
+
+        emitPollSystemMessages(type, *currentPoll);
+
+        const bool needsEndedByBackfill =
+            type == "POLL_END" &&
+            (status.compare("TERMINATED", Qt::CaseInsensitive) == 0 ||
+             status.compare("ARCHIVED", Qt::CaseInsensitive) == 0) &&
+            currentPoll->endedByName.isEmpty();
+
         this->setActivePoll(std::move(currentPoll));
+
+        if (needsEndedByBackfill)
+        {
+            this->refreshPollIfStale(true);
+        }
     };
 
     if (poll.isEmpty())
@@ -4590,10 +4897,11 @@ void TwitchChannel::handlePollUpdate(const QJsonObject &payload)
     event.pointsPerVote = pointsVotes.value("cost").toInt(
         pointsVotes.value("community_points_cost").toInt());
 
-    const auto createdBy = poll.value("created_by").toObject().isEmpty()
-                               ? poll.value("createdBy").toObject()
-                               : poll.value("created_by").toObject();
+    const auto createdBy = objectFromAnyKey(poll, "created_by", "createdBy");
     event.createdByName = userDisplayNameFromObject(createdBy);
+
+    const auto endedBy = objectFromAnyKey(poll, "ended_by", "endedBy");
+    event.endedByName = userDisplayNameFromObject(endedBy);
 
     const auto topContributor =
         poll.value("top_channel_points_contributor").toObject();
@@ -4656,7 +4964,22 @@ void TwitchChannel::handlePollUpdate(const QJsonObject &payload)
         }
     }
 
+    emitPollSystemMessages(type, event);
+
+    const bool needsCreatorBackfill =
+        type == "POLL_CREATE" && event.createdByName.isEmpty();
+    const bool needsEndedByBackfill =
+        type == "POLL_END" &&
+        (event.status.compare("TERMINATED", Qt::CaseInsensitive) == 0 ||
+         event.status.compare("ARCHIVED", Qt::CaseInsensitive) == 0) &&
+        event.endedByName.isEmpty();
+
     this->setActivePoll(std::move(event));
+
+    if (needsCreatorBackfill || needsEndedByBackfill)
+    {
+        this->refreshPollIfStale(true);
+    }
 }
 
 void TwitchChannel::handleRaidUpdate(const QJsonObject &payload)
